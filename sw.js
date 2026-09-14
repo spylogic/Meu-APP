@@ -2,7 +2,7 @@
 // vêm sempre direto do Firebase — nunca ficam presos em cache do service
 // worker (o cache dos últimos valores é feito à parte, via localStorage).
 
-const CACHE_NAME = "meus-projetos-v1";
+const CACHE_NAME = "meus-projetos-v2";
 const ARQUIVOS_CASCO = [
   "./",
   "./index.html",

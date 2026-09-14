@@ -23,12 +23,12 @@ const PROJETOS = [
     nome: "Irrigação",
     icone: "💧",
     tipo: "irrigacao",
-    // Ainda não está ao vivo — troque por null pra false assim que o projeto
-    // Firebase da irrigação estiver criado, e preencha a URL abaixo.
-    ativo: false,
-    firebaseBase: null, // ex: "https://irrigacao-default-rtdb.firebaseio.com"
-    caminho: "irrigacao",
-    campoAtualizadoEm: "atualizado_em",
+    ativo: true,
+    firebaseBase: "https://irrigador-com-nivel-default-rtdb.firebaseio.com",
+    // Limites usados pra colorir os valores (ajuste como quiser)
+    limites: {
+      nivel: { atencao: 40, critico: 20 }, // % (abaixo do valor = alerta)
+    },
   },
   {
     id: "pcb",

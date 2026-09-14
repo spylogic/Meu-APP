@@ -164,13 +164,22 @@ async function atualizarStatusCard(projeto) {
   }
 
   try {
-    const dados = await buscarJson(`${projeto.firebaseBase}/${projeto.caminho}/${projeto.campoAtualizadoEm}.json`);
+    const caminho = caminhoAtualizacao(projeto);
+    const dados = await buscarJson(`${projeto.firebaseBase}/${caminho}.json`);
     const ms = paraEpochMs(dados);
     const status = statusPorFrescor(ms);
     linha.innerHTML = `<span class="bolinha ${status}"></span> ${formatarHaQuanto(ms)}`;
   } catch (e) {
     linha.innerHTML = `<span class="bolinha danger"></span> sem conexão`;
   }
+}
+
+// Caminho REST (sem barra inicial/final) até o campo de "última atualização"
+// de cada tipo de projeto — cada schema de Firebase é um pouco diferente.
+function caminhoAtualizacao(projeto) {
+  if (projeto.tipo === "automotivo") return `${projeto.caminho}/${projeto.campoAtualizadoEm}`;
+  if (projeto.tipo === "irrigacao") return "status/last_update";
+  return "";
 }
 
 // --- tela de projeto: roteamento por tipo ---------------------------------
@@ -328,7 +337,8 @@ function renderIrrigacao(projeto) {
 async function carregarDadosIrrigacao(projeto) {
   const container = document.getElementById("conteudo-projeto");
   try {
-    const dados = await buscarJson(`${projeto.firebaseBase}/${projeto.caminho}.json`);
+    // Schema real do irrigador-com-nivel: dados na raiz do banco (config/ e status/).
+    const dados = await buscarJson(`${projeto.firebaseBase}/.json`);
     salvarCache(projeto.id, dados);
     renderDadosIrrigacao(projeto, dados, false);
   } catch (e) {
@@ -345,11 +355,14 @@ function renderDadosIrrigacao(projeto, dados, offline, salvoEm) {
   const container = document.getElementById("conteudo-projeto");
   if (!container) return;
 
-  const caixa = dados.caixa || {};
-  const ambiente = dados.ambiente || {};
-  const reservatorio = dados.reservatorio || {};
-  const bomba = dados.bomba || {};
-  const atualizadoEm = offline ? salvoEm : paraEpochMs(dados[projeto.campoAtualizadoEm]);
+  const status = dados.status || {};
+  const config = dados.config || {};
+  const tank = config.tank || {};
+  const manual = config.manual || {};
+  const atualizadoEm = offline ? salvoEm : paraEpochMs(status.last_update);
+
+  const nivelStatus = classificar(status.level_pct, projeto.limites.nivel, false);
+  const modoManual = status.mode === "manual";
 
   container.innerHTML = `
     ${offline ? `<div class="aviso" style="margin-bottom:16px;">📡 Sem conexão agora — mostrando o último dado recebido.</div>` : ""}
@@ -358,43 +371,74 @@ function renderDadosIrrigacao(projeto, dados, offline, salvoEm) {
     <div class="grade-metricas">
       <div class="metrica">
         <div class="rotulo">Nível</div>
-        <div class="valor ${caixa.nivel_pct !== undefined ? (caixa.nivel_pct < 20 ? "danger" : caixa.nivel_pct < 40 ? "warn" : "ok") : "muted"}">${formatarNumero(caixa.nivel_pct)}<span class="unidade">%</span></div>
+        <div class="valor ${nivelStatus}">${formatarNumero(status.level_pct)}<span class="unidade">%</span></div>
       </div>
       <div class="metrica">
-        <div class="rotulo">Água no reservatório</div>
-        <div class="valor ${reservatorio.agua_detectada ? "ok" : "warn"}">${reservatorio.agua_detectada === undefined ? "—" : reservatorio.agua_detectada ? "Detectada" : "Ausente"}</div>
+        <div class="rotulo">Volume</div>
+        <div class="valor">${formatarNumero(status.volume_l)}<span class="unidade"> / ${formatarNumero(tank.volume_l)} L</span></div>
       </div>
       <div class="metrica">
         <div class="rotulo">Temperatura</div>
-        <div class="valor">${formatarNumero(ambiente.temp_c)}<span class="unidade">°C</span></div>
+        <div class="valor">${formatarNumero(status.temp_c)}<span class="unidade">°C</span></div>
       </div>
       <div class="metrica">
         <div class="rotulo">Umidade</div>
-        <div class="valor">${formatarNumero(ambiente.umidade_pct)}<span class="unidade">%</span></div>
+        <div class="valor">${formatarNumero(status.humidity_pct)}<span class="unidade">%</span></div>
       </div>
     </div>
 
+    <div class="secao-titulo">Sistema</div>
+    <div class="grade-chips">
+      <div class="chip"><span class="bolinha ${status.wifi_ok ? "ok" : "danger"}"></span> Wi-Fi ${status.wifi_ok ? "conectado" : "sem conexão"}</div>
+      <div class="chip"><span class="bolinha ${modoManual ? "warn" : "ok"}"></span> Modo ${modoManual ? "manual" : "automático"}</div>
+      <div class="chip"><span class="bolinha ${status.blocked_overflow ? "danger" : "ok"}"></span> ${status.blocked_overflow ? "Transbordo bloqueado" : "Sem transbordo"}</div>
+    </div>
+
     <div class="secao-titulo">Bomba</div>
+    <div class="grade-metricas" style="margin-bottom:12px;">
+      <div class="metrica">
+        <div class="rotulo">Estado atual</div>
+        <div class="valor ${status.pump_on ? "ok" : "muted"}">${status.pump_on ? "Ligada" : "Desligada"}</div>
+      </div>
+    </div>
     <button class="botao-acao" id="btn-bomba" ${offline ? "disabled" : ""}>
-      ${bomba.estado ? "Desligar bomba" : "Ligar bomba"}
+      ${status.pump_on ? "Desligar bomba (manual)" : "Ligar bomba (manual)"}
     </button>
+    ${modoManual ? `<button class="botao-acao" id="btn-auto" style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);" ${offline ? "disabled" : ""}>Voltar para automático</button>` : ""}
 
     <div class="rodape-atualizacao">Última leitura: ${formatarHaQuanto(atualizadoEm)}</div>
   `;
 
-  const botao = document.getElementById("btn-bomba");
-  if (botao && !offline) {
-    botao.addEventListener("click", async () => {
-      botao.disabled = true;
+  const botaoBomba = document.getElementById("btn-bomba");
+  if (botaoBomba && !offline) {
+    botaoBomba.addEventListener("click", async () => {
+      botaoBomba.disabled = true;
       try {
-        await escreverFirebase(
-          `${projeto.firebaseBase}/${projeto.caminho}/bomba/comando_manual.json`,
-          !bomba.estado
-        );
+        await escreverFirebase(`${projeto.firebaseBase}/config/manual.json`, {
+          command: status.pump_on ? "off" : "on",
+          requestedAt: Math.floor(Date.now() / 1000),
+        });
       } catch (e) {
         alert("Não consegui enviar o comando. Tente de novo.");
       } finally {
-        botao.disabled = false;
+        botaoBomba.disabled = false;
+      }
+    });
+  }
+
+  const botaoAuto = document.getElementById("btn-auto");
+  if (botaoAuto && !offline) {
+    botaoAuto.addEventListener("click", async () => {
+      botaoAuto.disabled = true;
+      try {
+        await escreverFirebase(`${projeto.firebaseBase}/config/manual.json`, {
+          command: "auto",
+          requestedAt: Math.floor(Date.now() / 1000),
+        });
+      } catch (e) {
+        alert("Não consegui enviar o comando. Tente de novo.");
+      } finally {
+        botaoAuto.disabled = false;
       }
     });
   }
